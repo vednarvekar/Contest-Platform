@@ -4,7 +4,7 @@ import { Router } from "express";
 import * as zod from "zod";
 import { failureResponse, successResponse } from "../utils/response";
 import { requireContestee, requireCreator, signToken } from "../lib/jwt";
-import { requireAuth } from "../middleware/auth.middleware.js";
+// import { requireAuth } from "../middleware/auth.middleware.js";
 
 const router = Router();
 

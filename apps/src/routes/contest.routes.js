@@ -1,9 +1,10 @@
 import {db} from "../db/pg.js";
 import { Router } from "express";
 import * as zod from "zod";
-import { failureResponse, successResponse } from "../utils/response";
-import { requireContestee, requireCreator, } from "../lib/jwt";
+import { failureResponse, successResponse } from "../utils/response.js";
+import { requireContestee, requireCreator, } from "../lib/jwt.js";
 import { requireAuth } from "../middleware/auth.middleware.js";
+import axios from "axios";
 
 const router = Router();
 
@@ -258,4 +259,107 @@ router.post("/api/contests/:contestId/dsa", requireAuth , requireCreator, async(
 
     const {title, description, tags, points, timeLimit, memoryLimit, testCases} = parsed.body;
 
+    try {
+        const contestCheck = await db.query(
+            `SELECT id FROM contests WHERE id = $1`,
+            [contestId]
+        )
+        if(contestCheck.rows.length == 0){
+            return res.status(404).json(failureResponse("CONTEST_NOT_FOUND"));
+        }
+
+        await db.query("BEGIN");
+
+        const problemRes = db.query(`
+            INSERT INTO dsa_problems (contest_id, title, description, tags, points, time_limit, memory_limit)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            RETURNING id`,
+            [contestId, title, description, tags, points, timeLimit, memoryLimit]
+        );
+        const problemId = problemRes.rows[0].id;
+
+        for(const tc of testCases){
+            await db.query(
+                `INSERT INTO test_cases(problem_id, input, expected_output, is_hidden)
+                VALUES ($1, $2, $3, $4)`,
+                [problemId, tc.input, tc.expectedOutput, tc.isHidden ?? false ]
+            )
+        }
+
+        await db.query("COMMIT");
+
+        return res.status(201).json(successResponse({
+            id: problemId,
+            contestId: contestId,
+        }))
+
+
+    } catch (error) {
+        await db.query("ROLLBACK");
+        return res.status(500).json(failureResponse("INTERNAL_SERVER_ERROR"));
+    }
+})
+
+// -------------------------------------------------------------------------------------------------------
+
+router.get("/api/problems/:problemId", requireAuth, async(req, res) => {
+    const {problemId} = req.params;
+
+    try {
+        const problemRes = await db.query(
+            `SELECT * FROM dsa_problems WHERE id = $1`, [problemId]
+        );
+        if(problemRes.rows.length == 0){
+            return res.status(404).json(failureResponse("PROBLEM_NOT_FOUND"));
+        }
+
+        const testcasesRes = await db.query(
+            `SELECT input, expected_output FROM test_cases 
+            WHERE problem_id = $1 AND is_hidden = false`,
+            [problemId]
+        );
+
+        const p = problemId.rows[0];
+        return res.status(200).json(successResponse({
+            id: p.id,
+            contestId: p.contest_id,
+            title: p.title,
+            description: p.description,
+            tags: p.tags,
+            timeLimit: p.time_limit,
+            memoryLimit: p.memory_limit,
+            testCases: testcasesRes.rows.map(tc => ({
+                input: tc.input,
+                expectedOutput: tc.expected_output
+            }))
+        }));
+
+    } catch (error) {
+        res.status(500).json(failureResponse("INTERNAL_SERVER_ERROR"));
+        
+    }
+});
+
+// -------------------------------------------------------------------------------------------------------
+
+const dsaPrbSubmitSchema = zod.object({
+    code: zod.string(),
+    langauge: zod.string()
+})
+
+router.post("/api/problems/:problemId/submit", requireAuth, requireContestee, async(req, res) => {
+    const {problemId} = req.params;
+    const parsed = dsaPrbSubmitSchema.safeParse(req.body);
+
+    if(!parsed.success){
+        return res.status(400).json(failureResponse("INVALID_REQUEST"))
+    }
+
+    try {
+        const problemRes = await db.query(
+            `SELECT points FROM  dsa_problems WHERE id = $1`
+        )
+    } catch (error) {
+        
+    }
 })
