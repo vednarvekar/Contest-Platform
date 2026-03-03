@@ -5,6 +5,8 @@ import { failureResponse, successResponse } from "../utils/response.js";
 import { requireContestee, requireCreator, } from "../lib/jwt.js";
 import { requireAuth } from "../middleware/auth.middleware.js";
 import axios from "axios";
+import { fi } from "zod/v4/locales";
+import status, { code } from "statuses";
 
 const router = Router();
 
@@ -51,7 +53,7 @@ router.post("/api/contests", requireAuth, requireCreator, async(req, res) => {
 
 // -------------------------------------------------------------------------------------------------------
 
-router.post("/api/contests/:constestId", requireAuth, async(req, res) => {
+router.post("/api/contests/:contestId", requireAuth, async(req, res) => {
     const {contestId} = req.params;
 
     try {
@@ -71,14 +73,14 @@ router.post("/api/contests/:constestId", requireAuth, async(req, res) => {
         const mscRes = await db.query(
             `SELECT id, question_text, options, points
             FROM mcq_questions
-            WHERE contests_id = $1`,
+            WHERE contest_id = $1`,
             [contestId]
         );
 
         const dsaRes = await db.query(
             `SELECT id, title, description, tags, points, time_limit, memory_limit
             FROM dsa_problems
-            WHERE contests_id = $1`,
+            WHERE contest_id = $1`,
             [contestId]
         );
 
@@ -143,7 +145,7 @@ router.post("/api/contests/:contestId/mcq", requireAuth, requireCreator, async(r
 
         const mcqRes = await db.query(
             `INSERT INTO mcq_questions 
-            (contests_id, question_text, options, correct_option_index, points)
+            (contest_id, question_text, options, correct_option_index, points)
             VALUES ($1, $2, $3, $4, $5)
             RETURNING id`
             [contestId, questionText, JSON.stringify(options), correctOptionIndex, points ?? 1]
@@ -217,7 +219,7 @@ router.post("/api/contests/:contestId/mcq/:questionId/submit", requireAuth, requ
         const pointsEarned = isCorrect ? mcq.points : 0;
 
         await db.query(
-            ` INSERT INTO mcq_questions 
+            ` INSERT INTO mcq_submissions
             (user_id, question_id, selected_option_index, is_correct, points_earned)
             VALUES ($1, $2, $3, $4, $5)`,
             [userId, questionId, selectedOptionIndex, isCorrect, pointsEarned]
@@ -335,7 +337,7 @@ router.get("/api/problems/:problemId", requireAuth, async(req, res) => {
         }));
 
     } catch (error) {
-        res.status(500).json(failureResponse("INTERNAL_SERVER_ERROR"));
+        return res.status(500).json(failureResponse("INTERNAL_SERVER_ERROR"));
         
     }
 });
@@ -344,22 +346,156 @@ router.get("/api/problems/:problemId", requireAuth, async(req, res) => {
 
 const dsaPrbSubmitSchema = zod.object({
     code: zod.string(),
-    langauge: zod.string()
-})
+    language: zod.string(),
+});
 
-router.post("/api/problems/:problemId/submit", requireAuth, requireContestee, async(req, res) => {
-    const {problemId} = req.params;
+router.post("/api/problems/:problemId/submit", requireAuth, requireContestee, async (req, res) => {
+    const { problemId } = req.params;
+    const userId = req.user.id;
     const parsed = dsaPrbSubmitSchema.safeParse(req.body);
 
-    if(!parsed.success){
-        return res.status(400).json(failureResponse("INVALID_REQUEST"))
+    if (!parsed.success) {
+        return res.status(400).json(failureResponse("INVALID_REQUEST"));
     }
 
+    const { code, language } = parsed.data;
+
     try {
+        // 1. Check Contest Activity & Problem Points
         const problemRes = await db.query(
-            `SELECT points FROM  dsa_problems WHERE id = $1`
-        )
+            `SELECT dp.points, c.start_time, c.end_time 
+             FROM dsa_problems dp
+             JOIN contests c ON dp.contest_id = c.id
+             WHERE dp.id = $1`,
+            [problemId]
+        );
+
+        if (problemRes.rows.length === 0) {
+            return res.status(404).json(failureResponse("PROBLEM_NOT_FOUND"));
+        }
+
+        const { points, start_time, end_time } = problemRes.rows[0];
+        const now = new Date();
+        if (now < start_time || now > end_time) {
+            return res.status(400).json(failureResponse("CONTEST_NOT_ACTIVE"));
+        }
+
+        // 2. Fetch all test cases
+        const tecRes = await db.query(
+            `SELECT input, expected_output FROM test_cases WHERE problem_id = $1`,
+            [problemId]
+        );
+
+        const testCases = tecRes.rows;
+        let passedCount = 0;
+        let finalStatus = "accepted";
+
+        // 3. Evaluate against Judge0
+        for (const tc of testCases) {
+            const response = await axios.post("http://localhost:2358/submissions?wait=true", {
+                source_code: Buffer.from(code).toString('base64'),
+                language_id: 63, // Note: Ideally map this based on 'language' string
+                stdin: Buffer.from(tc.input).toString('base64'),
+                expected_output: Buffer.from(tc.expected_output).toString('base64')
+            });
+
+            const judgeStatus = response.data.status.id;
+
+            if (judgeStatus !== 3) { // 3 is 'Accepted' in Judge0
+                if (judgeStatus === 4) finalStatus = "wrong_answer";
+                else if (judgeStatus === 5) finalStatus = "time_limit_exceeded";
+                else finalStatus = "runtime_error";
+                // We keep looping to get a full count, or break if you prefer "all or nothing"
+            } else {
+                passedCount++;
+            }
+        }
+
+        const total = testCases.length;
+        const pointsEarned = total > 0 ? Math.floor((passedCount / total) * points) : 0;
+        if (passedCount < total && finalStatus === "accepted") finalStatus = "wrong_answer";
+
+        // 4. Save Submission
+        await db.query(
+            `INSERT INTO dsa_submissions 
+            (user_id, problem_id, code, language, status, points_earned, test_cases_passed, total_test_cases)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+            [userId, problemId, code, language, finalStatus, pointsEarned, passedCount, total]
+        );
+
+        return res.status(201).json(successResponse({
+            status: finalStatus,
+            pointsEarned: pointsEarned,
+            testCasesPassed: passedCount,
+            totalTestCases: total
+        }));
+
     } catch (error) {
-        
+        console.error("Submission Error:", error);
+        return res.status(500).json(failureResponse("INTERNAL_SERVER_ERROR"));
+    }
+});
+
+// -------------------------------------------------------------------------------------------------------
+
+router.get("/api/contests/:contestId/leaderboard", requireAuth, async(req, res) => {
+    const {contestId} = req.params;
+
+    try {
+        const contestRes = await db.query(
+            `SELECT id FROM contests WHERE id = $1`,
+            [contestId]
+        );
+        if(contestRes.rows.length == 0){
+            return res.status(404).json(failureResponse("CONTEST_NOT_FOUND"))
+        };
+
+       const leaderboardQuery = `
+            WITH user_mcq_scores AS (
+                -- Sum MCQ points per user
+                SELECT ms.user_id, SUM(ms.points_earned) as total_mcq
+                FROM mcq_submissions ms
+                JOIN mcq_questions mq ON ms.question_id = mq.id
+                WHERE mq.contest_id = $1
+                GROUP BY ms.user_id
+            ),
+            user_dsa_scores AS (
+                -- Get max points per problem, then sum them per user
+                SELECT user_id, SUM(max_problem_points) as total_dsa
+                FROM (
+                    SELECT ds.user_id, ds.problem_id, MAX(ds.points_earned) as max_problem_points
+                    FROM dsa_submissions ds
+                    JOIN dsa_problems dp ON ds.problem_id = dp.id
+                    WHERE dp.contest_id = $1
+                    GROUP BY ds.user_id, ds.problem_id
+                ) as best_subs
+                GROUP BY user_id
+            )
+            SELECT 
+                u.id as "userId",
+                u.name,
+                COALESCE(m.total_mcq, 0) + COALESCE(d.total_dsa, 0) as "totalPoints",
+                DENSE_RANK() OVER (ORDER BY (COALESCE(m.total_mcq, 0) + COALESCE(d.total_dsa, 0)) DESC) as rank
+            FROM users u
+            LEFT JOIN user_mcq_scores m ON u.id = m.user_id
+            LEFT JOIN user_dsa_scores d ON u.id = d.user_id
+            WHERE m.user_id IS NOT NULL OR d.user_id IS NOT NULL
+            ORDER BY "totalPoints" DESC, u.name ASC;
+        `
+        const result = await db.query(leaderboardQuery, [contestId]);
+
+        const data = result.rows.map(row => ({
+            userId: row.userId,
+            name: row.name,
+            totalPoints: parseInt(row.totalPoints),
+            rank: parseInt(row.rank),
+        }));
+
+        return res.status(200).json(successResponse(data));
+
+
+    } catch (error) {
+        console.error(error);
+        return res.status(500).json(failureResponse("INTERNAL_SERVER_ERROR"));
     }
 })

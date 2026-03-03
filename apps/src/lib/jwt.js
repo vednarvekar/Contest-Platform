@@ -16,26 +16,24 @@ export const requireContestee = (req, res, next) => {
   next();
 };
 
-export const signToken = (userId, role) => {
+export const signToken = (res, userId, role) => {
     if(!JWT_SECRET){
-        res.status(500).json(errorResponse("INTERNAL_SERVER_ERROR"))
+      return res.status(500).json(errorResponse("INTERNAL_SERVER_ERROR"))
     }
 
     const payload = {userId, role};
     const token = jwt.sign(payload, JWT_SECRET, {expiresIn: "1d"});
-
 return token;
 }
 
-export const verifyToken = (token) => {
+export const verifyToken = (res, token) => {
     if(!JWT_SECRET){
-        res.status(500).json(errorResponse("INTERNAL_SERVER_ERROR"))
+      return res.status(500).json(errorResponse("INTERNAL_SERVER_ERROR"))
     }
     if(!token) {
-        res.status(500).json(errorResponse("INTERNAL_SERVER_ERROR"))
+      return res.status(500).json(errorResponse("INTERNAL_SERVER_ERROR"))
     }
 
     const decoded = jwt.verify(token, JWT_SECRET);
-
 return decoded;
 }
