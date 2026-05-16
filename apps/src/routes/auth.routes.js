@@ -1,20 +1,19 @@
 import bcrypt from "bcrypt";
-import {db} from "../db/pg.js";
+import { db } from "../db/pg.js";
 import { Router } from "express";
 import * as zod from "zod";
-import { failureResponse, successResponse } from "../utils/response";
-import { requireContestee, requireCreator, signToken } from "../lib/jwt";
-// import { requireAuth } from "../middleware/auth.middleware.js";
+import { failureResponse, successResponse } from "../utils/response.js";
+import { signToken } from "../lib/jwt.js";
 
 const router = Router();
 
 // -------------------------------------------------------------------------------------------------------
 
 const userSchema = zod.object({
-    name: zod.string().min(1),
-    email: zod.email(),
-    password: zod.string().min(6),
-    role: zod.string().optional(),
+  name: zod.string().min(1),
+  email: zod.string().email(),
+  password: zod.string().min(6),
+  role: zod.enum(["creator", "contestee"]).optional(),
 });
 
 router.post("/api/auth/signup", async(req, res) => {
@@ -48,15 +47,16 @@ router.post("/api/auth/signup", async(req, res) => {
         return res.status(201).json(successResponse(result.rows[0]));
 
     } catch (error) {
-        res.status(500).json(failureResponse("INTERNAL SERVER ERROR"))
+        console.error("[auth][signup] error", error);
+        res.status(500).json(failureResponse("INTERNAL_SERVER_ERROR"))
     }
 });
 
 // -------------------------------------------------------------------------------------------------------
 
 const loginSchema = zod.object({
-    email: zod.email(),
-    password: zod.string().min(6),
+  email: zod.string().email(),
+  password: zod.string().min(6),
 });
 
 router.post("/api/auth/login", async(req, res) => {
@@ -89,10 +89,11 @@ router.post("/api/auth/login", async(req, res) => {
         return res.status(200).json(successResponse({token}));
 
     } catch (error) {
+        console.error("[auth][login] error", error);
         return res.status(500).json(failureResponse("INTERNAL_SERVER_ERROR"))
     }
-})
+});
 
 // -------------------------------------------------------------------------------------------------------
 
-
+export default router;

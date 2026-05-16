@@ -15,9 +15,12 @@ const AuthContext = createContext<AuthContextType | null>(null);
 
 function decodeToken(token: string): AuthUser | null {
   try {
-    const payload = JSON.parse(atob(token.split(".")[1]));
+    const payloadPart = token.split(".")[1];
+    const base64 = payloadPart.replace(/-/g, "+").replace(/_/g, "/");
+    const padded = base64 + "=".repeat((4 - (base64.length % 4)) % 4);
+    const payload = JSON.parse(atob(padded));
     return {
-      id: payload.id || payload.userId || payload.sub,
+      id: String(payload.id || payload.userId || payload.sub || ""),
       name: payload.name || "",
       email: payload.email || "",
       role: payload.role || "contestee",

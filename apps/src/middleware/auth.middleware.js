@@ -1,5 +1,5 @@
-import { verifyToken } from "../lib/jwt";
-import { failureResponse } from "../utils/response";
+import { verifyToken } from "../lib/jwt.js";
+import { failureResponse } from "../utils/response.js";
 
 export const requireAuth = (req, res, next) => {
     try {
@@ -22,4 +22,3 @@ export const requireAuth = (req, res, next) => {
         return res.status(401).json(failureResponse("UNAUTHORIZED"));
     }
 }
-

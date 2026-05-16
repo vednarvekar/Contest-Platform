@@ -42,7 +42,7 @@ export default function AddMCQPage() {
     if (correctIndex >= trimmedOptions.length) { setError("Invalid correct option"); return; }
 
     setLoading(true);
-    const res = await api.addMCQ(Number(contestId), {
+    const res = await api.addMCQ(contestId || "", {
       questionText: questionText.trim(),
       options: trimmedOptions,
       correctOptionIndex: correctIndex,

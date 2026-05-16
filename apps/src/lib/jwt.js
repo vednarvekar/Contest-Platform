@@ -1,6 +1,17 @@
-import jwt from "jsonwebtoken"
-import { JWT_SECRET } from "../server.js"
-import { errorResponse} from "../utils/response.js"
+import jwt from "jsonwebtoken";
+import { failureResponse } from "../utils/response.js";
+import dotenv from "dotenv";
+
+dotenv.config({ path: "src/.env" });
+dotenv.config();
+
+const getJwtSecret = () => {
+  const secret = process.env.JWT_SECRET;
+  if (!secret) {
+    throw new Error("JWT_SECRET is not configured");
+  }
+  return secret;
+};
 
 export const requireCreator = (req, res, next) => {
   if (req.user.role !== "creator") {
@@ -16,24 +27,15 @@ export const requireContestee = (req, res, next) => {
   next();
 };
 
-export const signToken = (res, userId, role) => {
-    if(!JWT_SECRET){
-      return res.status(500).json(errorResponse("INTERNAL_SERVER_ERROR"))
-    }
+export const signToken = (userId, role) => {
+  const payload = { userId, role };
+  return jwt.sign(payload, getJwtSecret(), { expiresIn: "1d" });
+};
 
-    const payload = {userId, role};
-    const token = jwt.sign(payload, JWT_SECRET, {expiresIn: "1d"});
-return token;
-}
+export const verifyToken = (token) => {
+  if (!token) {
+    throw new Error("Missing token");
+  }
 
-export const verifyToken = (res, token) => {
-    if(!JWT_SECRET){
-      return res.status(500).json(errorResponse("INTERNAL_SERVER_ERROR"))
-    }
-    if(!token) {
-      return res.status(500).json(errorResponse("INTERNAL_SERVER_ERROR"))
-    }
-
-    const decoded = jwt.verify(token, JWT_SECRET);
-return decoded;
-}
+  return jwt.verify(token, getJwtSecret());
+};

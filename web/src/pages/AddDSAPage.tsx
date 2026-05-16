@@ -53,7 +53,7 @@ export default function AddDSAPage() {
     }
 
     setLoading(true);
-    const res = await api.addDSA(Number(contestId), {
+    const res = await api.addDSA(contestId || "", {
       title: title.trim(),
       description: description.trim(),
       tags: tags.split(",").map((t) => t.trim()).filter(Boolean),
